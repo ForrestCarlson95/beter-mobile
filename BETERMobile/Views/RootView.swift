@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import SafariServices
 
 struct RootView: View {
     @EnvironmentObject var model: AppModel
@@ -23,7 +24,9 @@ struct RootView: View {
 /// Step 1: this app joins the owner's private network (its own Tailscale node, nothing system-wide).
 struct ConnectView: View {
     @EnvironmentObject var model: AppModel
-    @Environment(\.openURL) private var openURL
+    @State private var signInURL: URL?
+    @State private var showKey = false
+    @State private var authKey = ""
 
     var body: some View {
         VStack(spacing: 20) {
@@ -35,10 +38,11 @@ struct ConnectView: View {
             switch model.tailnet {
             case .needsLogin:
                 if let url = model.loginURL.flatMap(URL.init(string:)) {
-                    Button { openURL(url) } label: {
+                    Button { signInURL = url } label: {
                         Label("Sign in to Tailscale", systemImage: "person.badge.key").frame(maxWidth: .infinity)
                     }.buttonStyle(.borderedProminent).controlSize(.large)
-                    Text("After signing in, come back here.").font(.footnote).foregroundStyle(.secondary)
+                    Text("Sign in, then tap Connect on the page that names beter-iphone. This closes by itself once it's connected.")
+                        .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 } else {
                     ProgressView("Getting the sign-in link…")
                     Button("Ask again") { Task { await Tailnet.shared.requestLogin() } }
@@ -53,10 +57,26 @@ struct ConnectView: View {
                 }
                 Button("Retry") { Task { await Tailnet.shared.restart() } }.padding(.top, 8)
             }
+            DisclosureGroup("Use an auth key instead", isExpanded: $showKey) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("On the PC, open login.tailscale.com/admin/settings/keys → Generate auth key (defaults are fine) → copy it, and paste it here.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    SecureField("tskey-auth-…", text: $authKey).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .padding(8).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    Button("Connect with key") {
+                        let k = authKey
+                        authKey = ""
+                        Task { await Tailnet.shared.restart(authKey: k) }
+                    }.disabled(!authKey.hasPrefix("tskey-"))
+                }.padding(.top, 6)
+            }
+            .font(.footnote)
             Spacer()
             Text("Remote Access: \(label)").font(.footnote).foregroundStyle(.secondary)
         }
         .padding(24)
+        .sheet(item: $signInURL) { url in SafariView(url: url).ignoresSafeArea() }
+        .onChange(of: model.tailnet) { _, st in if st == .running { signInURL = nil } }
     }
 
     var label: String {
@@ -67,4 +87,21 @@ struct ConnectView: View {
         case .starting: return "Connecting"
         }
     }
+}
+
+
+extension URL: @retroactive Identifiable {
+    public var id: String { absoluteString }
+}
+
+/// Sign-in inside the app: the app stays in the foreground, so its network engine is awake when the sign-in completes
+/// (with Safari, iOS pauses the app and the engine misses it).
+struct SafariView: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        let c = SFSafariViewController.Configuration()
+        c.entersReaderIfAvailable = false
+        return SFSafariViewController(url: url, configuration: c)
+    }
+    func updateUIViewController(_ vc: SFSafariViewController, context: Context) {}
 }

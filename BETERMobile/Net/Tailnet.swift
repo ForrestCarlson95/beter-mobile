@@ -83,17 +83,18 @@ actor Tailnet {
     }
 
     /// Starts the node (idempotent). Returns at once; state changes arrive through observe().
-    func start() {
+    func start(authKey: String? = nil) {
         guard node == nil, !starting else { return }
         starting = true
         state = .starting
         publish()
-        Task { await self.bringUp() }
+        Task { await self.bringUp(authKey: authKey) }
     }
 
-    private func bringUp() async {
+    private func bringUp(authKey: String?) async {
         do {
-            let cfg = Configuration(hostName: "beter-iphone", path: Self.dataDir(), authKey: nil,
+            let key = authKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cfg = Configuration(hostName: "beter-iphone", path: Self.dataDir(), authKey: (key?.isEmpty ?? true) ? nil : key,
                                     controlURL: kDefaultControlURL, ephemeral: false)
             let n = try TailscaleNode(config: cfg, logger: TSLogger())
             node = n
@@ -154,14 +155,17 @@ actor Tailnet {
     }
 
     /// Throws away the node and starts again (Retry on the connect screen).
-    func restart() async {
+    func restart(authKey: String? = nil) async {
+        generation += 1
         if let node { try? await node.close() }
         node = nil
         client = nil
         processor = nil
         config = nil
         starting = false
-        start()
+        loginURL = nil
+        lastError = nil
+        start(authKey: authKey)
     }
 
     private func setProcessor(_ p: MessageProcessor) { processor = p }
