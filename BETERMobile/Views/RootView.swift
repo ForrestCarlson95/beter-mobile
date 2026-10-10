@@ -45,9 +45,13 @@ struct ConnectView: View {
                 }
             case .failed:
                 Text(model.tailnetError ?? "The private network could not start.").foregroundStyle(.red).multilineTextAlignment(.center)
-                Button("Try again") { Task { await Tailnet.shared.requestLogin() } }
+                Button("Try again") { Task { await Tailnet.shared.restart() } }
             default:
                 ProgressView("Starting the private network…")
+                if let e = model.tailnetError {
+                    Text(e).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
+                Button("Retry") { Task { await Tailnet.shared.restart() } }.padding(.top, 8)
             }
             Spacer()
             Text("Remote Access: \(label)").font(.footnote).foregroundStyle(.secondary)

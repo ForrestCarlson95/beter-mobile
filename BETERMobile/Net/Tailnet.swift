@@ -49,6 +49,7 @@ actor Tailnet {
     private var processor: MessageProcessor?
     private var config: URLSessionConfiguration?
     private var starting = false
+    private var generation = 0
 
     private(set) var state: TailnetState = .stopped
     private(set) var loginURL: String?
@@ -96,26 +97,71 @@ actor Tailnet {
                                     controlURL: kDefaultControlURL, ephemeral: false)
             let n = try TailscaleNode(config: cfg, logger: TSLogger())
             node = n
-            // watch the node's events first: up() waits until sign-in is done, and the sign-in link arrives as an event
+            // 1. start the engine (its local control API and proxy) - up() itself waits until sign-in is done
+            _ = try await n.loopback()
             let c = LocalAPIClient(localNode: n, logger: TSLogger())
             client = c
+            // 2. bring the node up in the background; it returns once signed in
+            Task.detached {
+                do { try await n.up() } catch { await self.update(.failed, nil, "up: \(error)") }
+            }
+            // 3. ask the engine for its state and sign-in link until it is running (the same way the PC does)
+            generation += 1
+            let gen = generation
+            Task { await self.poll(gen) }
+            // 4. live events too, when the bus works (faster state changes)
             let watcher = TailnetWatcher { [weak self] st, url, err in
                 Task { await self?.update(st, url, err) }
             }
             Task {
-                do {
-                    let p = try await c.watchIPNBus(mask: [.initialState, .prefs], consumer: watcher)
-                    await self.setProcessor(p)
-                } catch {
-                    await self.update(nil, nil, "watch: \(error)")
-                }
+                if let p = try? await c.watchIPNBus(mask: [.initialState, .prefs], consumer: watcher) { await self.setProcessor(p) }
             }
-            try await n.up()
-            update(.running, nil, nil)
         } catch {
             update(.failed, nil, "\(error)")
         }
         starting = false
+    }
+
+    private func poll(_ gen: Int) async {
+        var askedForLink = Date.distantPast
+        while gen == generation {
+            if let client {
+                do {
+                    let st = try await client.backendStatus()
+                    let mapped: TailnetState
+                    switch st.BackendState {
+                    case "Running": mapped = .running
+                    case "NeedsLogin", "NeedsMachineAuth": mapped = .needsLogin
+                    case "Stopped": mapped = .stopped
+                    default: mapped = .starting
+                    }
+                    update(mapped, st.AuthURL.isEmpty ? nil : st.AuthURL, nil)
+                    if mapped == .needsLogin && st.AuthURL.isEmpty && Date().timeIntervalSince(askedForLink) > 10 {
+                        askedForLink = Date()
+                        try? await client.startLoginInteractive()
+                    }
+                    if mapped == .running {
+                        try? await Task.sleep(nanoseconds: 15_000_000_000)     // running: check now and then
+                        continue
+                    }
+                } catch {
+                    lastError = "status: \(error)"
+                    publish()
+                }
+            }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+        }
+    }
+
+    /// Throws away the node and starts again (Retry on the connect screen).
+    func restart() async {
+        if let node { try? await node.close() }
+        node = nil
+        client = nil
+        processor = nil
+        config = nil
+        starting = false
+        start()
     }
 
     private func setProcessor(_ p: MessageProcessor) { processor = p }
