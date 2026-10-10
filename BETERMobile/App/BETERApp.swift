@@ -32,7 +32,13 @@ struct BETERApp: App {
         }
         .onChange(of: phase) { _, p in
             model.foreground = (p == .active)
-            if p == .active { model.poke() }
+            if p == .active {
+                Task {
+                    await Tailnet.shared.checkAfterResume()
+                    await BeterAPI.shared.reset()
+                    model.poke()
+                }
+            }
             if p == .background { Self.scheduleRefresh() }
         }
     }

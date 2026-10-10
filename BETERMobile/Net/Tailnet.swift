@@ -1,5 +1,12 @@
 import Foundation
+import Network
 import TailscaleKit
+
+final class OnceFlag: @unchecked Sendable {
+    private var done = false
+    private let lock = NSLock()
+    func set() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
+}
 
 /// The app's own Tailscale node (TailscaleKit, userspace): only this app's requests go through it - no VPN profile, no
 /// separate Tailscale app. It signs in once (in Safari, with the owner's Tailscale account) and keeps its identity on disk.
@@ -195,4 +202,41 @@ actor Tailnet {
     }
 
     func resetSession() { config = nil }
+
+    func waitUntilRunning(seconds: Double) async -> Bool {
+        let end = Date().addingTimeInterval(seconds)
+        while Date() < end {
+            if state == .running && node != nil { return true }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        return state == .running
+    }
+
+    /// Back in the foreground: if iOS took the local proxy away while suspended, rebuild the node now (before the user taps).
+    func checkAfterResume() async {
+        guard state == .running, let node else { return }
+        do {
+            let lb = try await node.loopback()
+            guard let ip = lb.ip, let port = lb.port else { await restart(); return }
+            if !(await Self.portOpen(ip, port)) { await restart() }
+        } catch {
+            await restart()
+        }
+    }
+
+    private static func portOpen(_ ip: String, _ port: Int) async -> Bool {
+        await withCheckedContinuation { cont in
+            let conn = NWConnection(host: NWEndpoint.Host(ip), port: NWEndpoint.Port(rawValue: UInt16(port))!, using: .tcp)
+            let once = OnceFlag()
+            conn.stateUpdateHandler = { st in
+                switch st {
+                case .ready: if once.set() { conn.cancel(); cont.resume(returning: true) }
+                case .failed, .waiting: if once.set() { conn.cancel(); cont.resume(returning: false) }
+                default: break
+                }
+            }
+            conn.start(queue: .global())
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2) { if once.set() { conn.cancel(); cont.resume(returning: false) } }
+        }
+    }
 }

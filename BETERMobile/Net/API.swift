@@ -60,6 +60,14 @@ actor BeterAPI {
         return s
     }
 
+    private func send(_ req: URLRequest) async throws -> (Data, URLResponse) {
+        try await urlSession().data(for: req)
+    }
+
+    static func isLocalProxyFailure(_ e: URLError) -> Bool {
+        [.cannotConnectToHost, .networkConnectionLost, .secureConnectionFailed, .cannotFindHost].contains(e.code)
+    }
+
     func reset() async {
         session = nil
         await Tailnet.shared.resetSession()
@@ -79,9 +87,18 @@ actor BeterAPI {
         let data: Data
         let resp: URLResponse
         do {
-            (data, resp) = try await urlSession().data(for: req)
+            (data, resp) = try await send(req)
         } catch let e as APIError {
             throw e
+        } catch let e as URLError where Self.isLocalProxyFailure(e) {
+            // iOS closes the app's local Tailscale proxy while the app is in the background; rebuild the node and retry once
+            await reset()
+            await Tailnet.shared.restart()
+            guard await Tailnet.shared.waitUntilRunning(seconds: 25) else { throw APIError.offline("private network restarting - try again") }
+            do { (data, resp) = try await send(req) } catch {
+                await reset()
+                throw APIError.offline(error.localizedDescription)
+            }
         } catch {
             await reset()
             throw APIError.offline(error.localizedDescription)
