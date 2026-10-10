@@ -1,0 +1,64 @@
+name: Build iPhone app
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: ios-build
+  cancel-in-progress: true
+env:
+  LIBTAILSCALE_REF: 019b925b989a2d1bbf3d750f14c740a20078c98b
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get libtailscale (TailscaleKit, BSD-3-Clause)
+        run: |
+          git clone https://github.com/tailscale/libtailscale.git libtailscale
+          git -C libtailscale checkout "$LIBTAILSCALE_REF"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: libtailscale/go.mod
+          cache: false
+      - name: Show Xcode
+        run: xcodebuild -version
+      - name: Build TailscaleKit.framework (iOS device)
+        run: |
+          cd libtailscale/swift
+          make ios
+          mkdir -p "$GITHUB_WORKSPACE/Frameworks"
+          cp -R build/Build/Products/Release-iphoneos/TailscaleKit.framework "$GITHUB_WORKSPACE/Frameworks/"
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build the app (unsigned - Sideloadly signs it with your Apple ID)
+        run: |
+          set -o pipefail
+          xcodebuild -project BETERMobile.xcodeproj -scheme BETERMobile -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build 2>&1 | tee build.log | grep -E "error:|warning: unused|BUILD (SUCCEEDED|FAILED)" || true
+          test -d build/Build/Products/Release-iphoneos/BETER.app
+      - name: Package .ipa
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/BETER.app Payload/
+          zip -qry BETER-unsigned.ipa Payload
+          ls -la BETER-unsigned.ipa
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+      - name: Publish to the "latest" release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest BETER-unsigned.ipa --title "B.E.T.E.R. Mobile (latest build)" \
+            --notes "Unsigned build of ${GITHUB_SHA::7}. Install with Sideloadly using your Apple ID."

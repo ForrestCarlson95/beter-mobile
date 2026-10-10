@@ -1,0 +1,7 @@
+build/
+Frameworks/
+libtailscale/
+*.xcodeproj/
+Payload/
+*.ipa
+build.log

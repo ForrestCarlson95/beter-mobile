@@ -1,0 +1,47 @@
+name: BETERMobile
+options:
+  bundleIdPrefix: com.forrest
+  deploymentTarget:
+    iOS: "18.1"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""
+targets:
+  BETERMobile:
+    type: application
+    platform: iOS
+    sources:
+      - BETERMobile
+    dependencies:
+      - framework: Frameworks/TailscaleKit.framework
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.forrest.betermobile
+        PRODUCT_NAME: "BETER"
+        TARGETED_DEVICE_FAMILY: "1"
+        ENABLE_BITCODE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+    info:
+      path: BETERMobile/Info.plist
+      properties:
+        CFBundleDisplayName: B.E.T.E.R.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSCameraUsageDescription: Scan the pairing code shown by B.E.T.E.R. on your PC.
+        NSPhotoLibraryUsageDescription: Attach pictures to messages for B.E.T.E.R.
+        UIBackgroundModes: [fetch]
+        BGTaskSchedulerPermittedIdentifiers: [com.forrest.betermobile.refresh]
+        CFBundleURLTypes:
+          - CFBundleURLName: com.forrest.betermobile
+            CFBundleURLSchemes: [beter]
+        NSAppTransportSecurity:
+          NSExceptionDomains:
+            ts.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
